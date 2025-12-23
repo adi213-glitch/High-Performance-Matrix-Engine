@@ -450,8 +450,8 @@ Result run_benchmark(const std::string& name,
     std::fill(C.begin(), C.end(), 0.0);
     
     // 2. Warmup (optional, but good for stability)
-    // func(N, A, B, C); 
-    // std::fill(C.begin(), C.end(), 0.0);
+    func(N, A, B, C); 
+    std::fill(C.begin(), C.end(), 0.0);
 
     // 3. Run Benchmark
     auto start = std::chrono::high_resolution_clock::now();
