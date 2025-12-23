@@ -1,0 +1,48 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "High Performance Build & Run",
+            "type": "shell",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                // We wrap the entire command string in quotes ("...") so cmd handles the inner quotes correctly.
+                "\" \"D:\\msys2\\ucrt64\\bin\\g++.exe\" -std=c++17 -O3 -march=native -ffast-math -mfma -fopenmp -o \"${fileDirname}\\${fileBasenameNoExtension}.exe\" \"${file}\" && \"${fileDirname}\\${fileBasenameNoExtension}.exe\" \""
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": true
+            }
+        },
+        {
+            "label": "Debug Build (No Optimizations)",
+            "type": "cppbuild",
+            "command": "D:\\msys2\\ucrt64\\bin\\g++.exe",
+            "args": [
+                "-fdiagnostics-color=always",
+                "-g",
+                "-O0",
+                "-fopenmp",
+                "${file}",
+                "-o",
+                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": "build",
+            "detail": "Use this for debugging."
+        }
+    ]
+}
