@@ -518,7 +518,7 @@ int main() {
 
     print_row("Naive", baseline.gflops);
     print_row("Loop Reordered", reordered.gflops);
-    print_row("OpenMP + Blocking", openmp.gflops);
+    print_row("OpenMP + Tiling", openmp.gflops);
     print_row("AVX2 Ultimate", ultimate.gflops);
     
     std::cout << "================================================================" << std::endl;
