@@ -15,7 +15,7 @@ Achieved **~39 GFLOPS** on an Intel Core i3-1115G4 (Tiger Lake), reaching **~41%
 
 *[Insert Bar Chart Screenshot Here]*
 
-##  The Optimization Journey
+##  The Optimization Journey of C = A . B
 
 This project is structured as a series of incremental optimizations, identifying specific hardware bottlenecks at each stage and resolving them using Systems Engineering principles.
 
