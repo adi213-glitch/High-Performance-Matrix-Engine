@@ -13,7 +13,8 @@ Achieved **~39 GFLOPS** on an Intel Core i3-1115G4 (Tiger Lake), reaching **~41%
 | **v3. OpenMP** | Multithreaded + Tiling | 0.097 s | 21.04 | **~75x** |
 | **v4. Ultimate** | **AVX2 + Register Blocking** | **0.052 s** | **39.12** | **136x** |
 
-*[Insert Bar Chart Screenshot Here]*
+<img width="1600" height="960" alt="Code_Generated_Image" src="https://github.com/user-attachments/assets/880fed71-c0fa-4814-99aa-379b83599cb2" />
+
 
 ##  The Optimization Journey of C = A . B
 
