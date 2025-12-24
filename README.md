@@ -9,8 +9,8 @@ Achieved **~89 GFLOPS** on an AMD Zen 3 (Ryzen 5 5625U), reaching **~41% of the 
 | Version | Description | Time (s) | GFLOPS | Speedup |
 | :--- | :--- | :--- | :--- | :--- |
 | **v1. Naive** | Standard Triple Loop | 6.82 s | 0.31 | **1.0x** |
-| **v2. Reordered** | Memory-Aware (i-k-j) | 0.1152 s | 18.63 | **~9x** |
-| **v3. OpenMP** | Multithreaded + Tiling | 0.0276 s | 77.83 | **~75x** |
+| **v2. Reordered** | Memory-Aware (i-k-j) | 0.1152 s | 18.63 | **~59x** |
+| **v3. OpenMP** | Multithreaded + Tiling | 0.0276 s | 77.83 | **~247x** |
 | **v4. Ultimate** | **AVX2 + Register Blocking** | **0.024 s** | **89.38** | **283x** |
 
 <img width="1600" height="1018" alt="ryzen result" src="https://github.com/user-attachments/assets/fb7aa631-ea1b-41a8-8909-f8e509ab545b" />
