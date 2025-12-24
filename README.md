@@ -1,20 +1,19 @@
 # High-Performance GEMM Engine (C++ / AVX2 / OpenMP)
 
-A high-performance General Matrix Multiplication (GEMM) kernel engineered from scratch in C++. This project demonstrates the evolution of a compute-intensive kernel from a naive $O(N^3)$ implementation to a hardware-saturated, multithreaded engine achieving **136x speedup**.
+A high-performance General Matrix Multiplication (GEMM) kernel engineered from scratch in C++. This project demonstrates the evolution of a compute-intensive kernel from a naive $O(N^3)$ implementation to a hardware-saturated, multithreaded engine achieving **283x speedup**.
 
-Achieved **~39 GFLOPS** on an Intel Core i3-1115G4 (Tiger Lake), reaching **~41% of the hardware's Theoretical Peak Performance** by exploiting memory hierarchy, SIMD vectorization, and register-level blocking.
+Achieved **~89 GFLOPS** on an AMD Zen 3 (Ryzen 5 5625U), reaching **~41% of the hardware's Theoretical Peak Performance** by exploiting memory hierarchy, SIMD vectorization, and register-level blocking.
 
 ##  Performance Benchmarks (N=1024)
 
 | Version | Description | Time (s) | GFLOPS | Speedup |
 | :--- | :--- | :--- | :--- | :--- |
-| **v1. Naive** | Standard Triple Loop | 7.497 s | 0.28 | **1.0x** |
-| **v2. Reordered** | Memory-Aware (i-k-j) | 0.812 s | 2.51 | **~9x** |
-| **v3. OpenMP** | Multithreaded + Tiling | 0.097 s | 21.04 | **~75x** |
-| **v4. Ultimate** | **AVX2 + Register Blocking** | **0.052 s** | **39.12** | **136x** |
+| **v1. Naive** | Standard Triple Loop | 6.82 s | 0.31 | **1.0x** |
+| **v2. Reordered** | Memory-Aware (i-k-j) | 0.1152 s | 18.63 | **~9x** |
+| **v3. OpenMP** | Multithreaded + Tiling | 0.0276 s | 77.83 | **~75x** |
+| **v4. Ultimate** | **AVX2 + Register Blocking** | **0.024 s** | **89.38** | **283x** |
 
-<img width="1600" height="960" alt="Code_Generated_Image" src="https://github.com/user-attachments/assets/880fed71-c0fa-4814-99aa-379b83599cb2" />
-
+<img width="1600" height="1018" alt="ryzen result" src="https://github.com/user-attachments/assets/fb7aa631-ea1b-41a8-8909-f8e509ab545b" />
 
 ##  The Optimization Journey of C = A . B
 
@@ -23,13 +22,13 @@ This project is structured as a series of incremental optimizations, identifying
 ### Phase 1: The Memory Wall (Spatial Locality)
 * **Bottleneck:** The Naive implementation (`i-j-k` loop order) accesses Matrix B in column-major order. Since C++ stores arrays in row-major order, this caused a **Cache Miss** on almost every access, fetching entire cache lines just to use a single double.
 * **Solution:** Reordered loops to `i-k-j`. This accesses Matrix B sequentially (Stride-1), allowing the CPU's hardware prefetcher to load data into L1 cache efficiently.
-* **Result:** **9x Speedup** purely from memory access pattern changes.
+* **Result:** **59x Speedup** purely from memory access pattern changes.
 
 ### Phase 2: The Parallelism Wall (Multithreading)
 * **Bottleneck:** A single core cannot saturate the memory bandwidth or compute potential of modern CPUs.
 * **Solution:** Implemented **OpenMP** threading with `collapse(2)` to parallelize the outer loops.
 * **Engineering Challenge:** Identified a race condition in the initial `i-k-j` parallelization where multiple threads fought for the same `C[i][j]` accumulator. Resolved this by parallelizing the *output* coordinates (`i` and `j`), giving each thread a disjoint block of the Result Matrix to compute.
-* **Result:** **~75x Speedup** (Scaling linearly with core count).
+* **Result:** **~247x Speedup** (Scaling linearly with core count).
 
 ### Phase 3: The Arithmetic Intensity Wall (The "Ultimate" Kernel)
 * **Bottleneck:** Even with cache blocking (`BS=32/40`), the CPU spent more cycles loading data from L1 Cache into Registers than actually performing math. This is the classic "Von Neumann Bottleneck" at the L1 level.
@@ -37,7 +36,7 @@ This project is structured as a series of incremental optimizations, identifying
     * **SIMD:** Used `_mm256_fmadd_pd` (Fused Multiply-Add) to process 4 doubles per instruction.
     * **Register Blocking:** Unrolled the K-loop by 4. Instead of `Load C -> Math -> Store C`, the kernel loads a vector of C into a **YMM Register** and keeps it there while accumulating results from 4 different K-steps.
     * **Impact:** Reduced L1 Cache load/store traffic by **75%**, increasing Arithmetic Intensity and ensuring the FPUs (Floating Point Units) are fed constantly.
-* **Result:** **136x Speedup**, achieving 39 GFLOPS.
+* **Result:** **283x Speedup**, achieving 89.38 GFLOPS.
 
 ##  Technical Implementation Details
 
@@ -84,11 +83,11 @@ g++ Source.cpp -o gemm_engine -O3 -march=native -fopenmp
 ./gemm_engine
 ```
 ###  Roofline Analysis
-## Hardware: Intel Core i3-1115G4 (2 Cores, 4 Threads).
+## Hardware: Ryzen 5 5625U (6 cores, 12 threads).
 
-## Theoretical Peak: ~96 GFLOPS (Base Clock) / ~130 GFLOPS (Turbo).
+## Theoretical Peak: ~220.8 GFLOPS (Base Clock) / ~412.8 GFLOPS (Turbo).
 
-## Achieved: 39.12 GFLOPS.
+## Achieved: 89.38 GFLOPS.
 
 ## Efficiency: The kernel achieves ~41% of the theoretical hardware limit. The remaining gap is attributed to the thermal throttling characteristic of mobile SKUs running dense AVX2 workloads and the lack of Assembly-level prefetching.
 
