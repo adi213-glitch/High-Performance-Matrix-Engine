@@ -7,18 +7,8 @@
 #include <cmath>
 #include <functional> // For passing functions
 #include <immintrin.h>
-#include <omp.h> //
-/* generate 1024x1024 matrix with all cells set to double value 1.0 and return the matrix*/
-std::vector<double>  generate_matrix(int N){
-	std::vector<double> matrix (N*N,1);
-	return matrix;
-}
-
-/* generate zero matrix */
-std::vector<double> generate_zero_matrix(int N){
-	std::vector<double> matrix (N*N,0);
-	return matrix;
-}
+#include <omp.h> 
+#include <benchmark/benchmark.h>
 
 void naive_multiplication (int N, int BS,const std::vector<double> &A, const std::vector<double> &B, 
 						std::vector<double>&C)
@@ -74,7 +64,7 @@ void loop_unrolled_multiplication (int N, int BS,const std::vector<double> &A, c
 				C_ith_row[j+3] += (A_element * B_kth_row[j+3]);
 			}
 			// remaining elements (if any)
-			for( ; j < N ; j++){
+			for( ; j < N ; ++j){
 				C_ith_row[j] += (A_element * B_kth_row[j]);
 			}
 		}
@@ -87,7 +77,7 @@ void cache_blocking_multiplication (int N, int BS, const std::vector<double> &A,
 	// number of blocks needed (Ceiling division)
     int num_blocks = (N + BS - 1) / BS;
 
-
+    // now we have  matrix of size <=(num_blocksxnum_blocks) of size 40x40
 	// OUTER LOOPS: Iterate through Block Coordinates (0, 1, 2...)
     for(int i = 0; i < num_blocks; i++) {
         for(int j = 0; j < num_blocks; j++) {
@@ -161,11 +151,7 @@ void SIMD_refined_multiplication (int N,int BS, const std::vector<double> &A,  c
                         // since A_ele is going to be repeated 4 times at once, broadcast it in a vector register
                         const __m256d vector_a { _mm256_set1_pd(A_element)};
                         for(int q=0 ; q<j_limit; q+=4){
-                            //start pointer for C and B
-                            double  * C_ptr { &C_row[j*BS + q]  };
-                            const double  * B_ptr {&B_row[j*BS + q]};
-
-
+                            
                             // SAFETY CHECK: Ensure we don't go out of bounds if j_limit isn't divisible by 4.
                             // (Since BS=32, we are safe inside the block, but edge cases might need care.
                             // For this specific demo, we assume N is nice or we handle leftovers later).
@@ -178,6 +164,9 @@ void SIMD_refined_multiplication (int N,int BS, const std::vector<double> &A,  c
                                 break;
 							}
 
+                            //start pointer for C and B
+                            double  * C_ptr { &C_row[j*BS + q]  };
+                            const double  * B_ptr {&B_row[j*BS + q]};
 
                             // create vector sized variable that holds 4doubles
                             __m256d vector_c { _mm256_loadu_pd(C_ptr)};
@@ -297,7 +286,7 @@ void cache_blocking_and_multithreaded_multiplication (int N,int BS, const std::v
 
 
 	// "parallel for": Run loop in parallel
-    // "collapse(2)": Parallelize both i and k loops for better load balancing
+    // "collapse(2)": Parallelize both i and j loops for better load balancing
     #pragma omp parallel for collapse(2)
 
 	// OUTER LOOPS: Iterate through Block Coordinates (0, 1, 2...)
@@ -342,6 +331,10 @@ void ultimate_k_unrolled_multiplication(int N,int BS, const std::vector<double>&
     
     int num_blocks = (N + BS - 1) / BS;
 
+    // Distribute the workload across all available CPU threads.
+    // collapse(2) flattens the i and j loops into a single pool of (num_blocks * num_blocks) iterations.
+    // Crucial architecture note: By mapping threads to 'i' and 'j', each thread gets assigned a disjoint 
+    // memory region (tile) in matrix C. This eliminates race conditions natively, requiring zero locks.
     #pragma omp parallel for collapse(2)
     for (int i = 0; i < num_blocks; i++) {
         for (int j = 0; j < num_blocks; j++) {
@@ -350,17 +343,21 @@ void ultimate_k_unrolled_multiplication(int N,int BS, const std::vector<double>&
                 int i_limit = std::min(BS, N - (i * BS));
                 int j_limit = std::min(BS, N - (j * BS));
                 int k_limit = std::min(BS, N - (k * BS));
-
+                // Precompute base memory pointers for the current active tiles of A, B, and C.
                 const double* A_block_start = &A[0] + (i * BS * N + k * BS);
                 const double* B_block_start = &B[0] + (k * BS * N + j * BS);
                 double* C_block_start       = &C[0] + (i * BS * N + j * BS);
 
                 for (int p = 0; p < i_limit; p++) {
+                    // Set pointers to the specific rows within the current L1 cache-resident tiles
                     double* C_row = C_block_start + p * N;
                     const double* A_row = A_block_start + p * N;
 
                     // --- K-UNROLLING OPTIMIZATION ---
-                    // We process 4 'k' steps at once to minimize C load/stores.
+                    // The 'k' loop traverses the dot-product axis. By unrolling it by 4, we perform 
+                    // Register Blocking. We load a vector of C into a YMM register ONCE, accumulate 
+                    // 4 separate A*B products into it, and store it ONCE. 
+                    // This cuts L1 load/store traffic for matrix C by 75%, winning over the von Neumann bottleneck.
                     int r = 0;
                     for (; r < k_limit - 3; r += 4) {
                         
@@ -371,17 +368,23 @@ void ultimate_k_unrolled_multiplication(int N,int BS, const std::vector<double>&
                         __m256d vec_A3 = _mm256_set1_pd(A_row[r+3]);
 
                         // Pointers to the 4 rows of B we need
-                        const double* B_row0 = B_block_start + r * N;
+                        const double* B_row0 = B_block_start + (r) * N;
                         const double* B_row1 = B_block_start + (r+1) * N;
                         const double* B_row2 = B_block_start + (r+2) * N;
                         const double* B_row3 = B_block_start + (r+3) * N;
 
-                        // Inner J-Loop (Vectorized)
+                        // Inner J-Loop(vectorized): Moving across the columns of B and C in 256-bit chunks (4 doubles).
                         int q = 0;
                         for (; q  < j_limit - 3; q += 4) {
                             
-                            // LOAD C from memory ONLY ONCE
+                            // LOAD C from memory ONLY ONCE.Pulls 4 contiguous doubles
                             __m256d vec_C = _mm256_loadu_pd(&C_row[q]);
+
+
+                            // Each FMA computes: vec_C = (vec_A * vec_B) + vec_C in a single hardware step.
+                            // The execution unit handles these sequentially per chunk, but latency is hidden 
+                            // because we keep feeding the FPU without waiting on fresh loads of C.
+
 
                             // load 4 B vectors and Perform 4 FMAs (Accumulate in Register)
                             __m256d vec_B0 = _mm256_loadu_pd(&B_row0[q]);
@@ -401,6 +404,7 @@ void ultimate_k_unrolled_multiplication(int N,int BS, const std::vector<double>&
                         }
 
                         // Cleanup for J (scalar)
+                        // Safely handles the remaining 1-3 column elements if j_limit isn't divisible by 4.
                         for (; q < j_limit; q++) {
                             C_row[q] += A_row[r] * B_row0[q];
                             C_row[q] += A_row[r+1] * B_row1[q];
@@ -410,18 +414,21 @@ void ultimate_k_unrolled_multiplication(int N,int BS, const std::vector<double>&
                     }
 
                     // Cleanup for K (If k_limit is not divisible by 4)
+                    // Handles the remaining 1-3 dot-product iterations if k_limit isn't divisible by 4.
                     for (; r < k_limit; r++) {
                         const double* B_row = B_block_start + r * N;
                         double A_val = A_row[r];
-                        __m256d vec_A = _mm256_set1_pd(A_val);
+                        __m256d vec_A = _mm256_set1_pd(A_val); // Still broadcast A to maximize SIMD use
                         
                         int q = 0;
+                        // Vectorized processing for the leftover K steps (still processing 4 J's at a time)
                         for (; q <= j_limit - 4; q += 4) {
                             __m256d vec_C = _mm256_loadu_pd(&C_row[q]);
                             __m256d vec_B = _mm256_loadu_pd(&B_row[q]);
                             vec_C = _mm256_fmadd_pd(vec_A, vec_B, vec_C);
                             _mm256_storeu_pd(&C_row[q], vec_C);
                         }
+                        // Pure scalar fallback for the absolute edge cases of the matrix bounds
                         for (; q < j_limit; q++) {
                             C_row[q] += A_val * B_row[q];
                         }
@@ -431,97 +438,154 @@ void ultimate_k_unrolled_multiplication(int N,int BS, const std::vector<double>&
         }
     }
 }
-
-struct Result {
-    double time;
-    double gflops;
-};
-
-// This function runs any multiplication kernel you pass to it
-Result run_benchmark(const std::string& name, 
-                     void (*func)(int, int , const std::vector<double>&, const std::vector<double>&, std::vector<double>&),
-                     int N, 
-                     int BS,
-                     const std::vector<double>& A, 
-                     const std::vector<double>& B, 
-                     std::vector<double>& C) 
-{
-    // 1. Reset C
-    std::fill(C.begin(), C.end(), 0.0);
+// 1. Template Benchmark Function
+// This generic function handles the setup, execution, and metric calculation for ANY passed kernel.
+template <class Func>
+static void BM_GEMM(benchmark::State& state, Func func) {
+    // state.range(0) pulls the current dynamic size injected by the Range() macro below.
+    int N = state.range(0);
+    int BS = 32; 
     
-    // 2. Warmup (optional, but good for stability)
-    func(N,BS, A, B, C); 
-    std::fill(C.begin(), C.end(), 0.0);
+    // 2. Setup Phase (NOT timed)
+    // Allocations here happen once per run and are excluded from the final latency measurement.
+    const std::vector<double> A(N * N, 1.0);
+    const std::vector<double> B(N * N, 1.0);
+    std::vector<double> C(N * N, 0.0);
 
-    // 3. Run Benchmark
-    auto start = std::chrono::high_resolution_clock::now();
-    func(N, BS,A, B, C);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    // 4. Calculate Metrics
-    std::chrono::duration<double> diff = end - start;
-    double seconds = diff.count();
-    double operations = 2.0 * N * N * N; // 2N^3 FLOPs
-    double gflops = (operations * 1e-9) / seconds;
-
-    // 5. Verify (Just checking one cell is usually enough for a quick check)
-    if (std::abs(C[0] - N) > 1e-9) {
-        std::cout << "[FAILED] " << name << " produced incorrect math!" << std::endl;
-        return {seconds, 0.0};
+    // 3. The Timing Loop
+    // The engine dynamically runs this loop until it calculates a statistically stable average time.
+    for (auto _ : state) {
+        // ONLY the code inside this loop is measured for time[cite: 3].
+        func(N, BS, A, B, C);
+        
+        // 4. The Compiler Defense
+        // Acts as a compiler memory barrier. It assumes all globally visible memory (like Matrix C) 
+        // has been modified, preventing the compiler from deleting the entire loop via Dead Code Elimination[cite: 3].
+        benchmark::ClobberMemory();
     }
-
-    std::cout << std::left << std::setw(35) << name 
-              << " | Time: " << std::fixed << std::setprecision(4) << seconds << " s"
-              << " | GFLOPS: " << std::setprecision(2) << gflops << std::endl;
-
-    return {seconds, gflops};
-}
-
-int main() {
-    int N = 1024;
-    int BS = 40;
-    std::cout << "================================================================" << std::endl;
-    std::cout << "   HIGH-PERFORMANCE MATRIX MULTIPLICATION BENCHMARK (N=" << N << ")" << std::endl;
-    std::cout << "================================================================" << std::endl;
-
-    // Generate Data
-    std::vector<double> A = generate_matrix(N);
-    std::vector<double> B = generate_matrix(N);
-    std::vector<double> C = generate_zero_matrix(N);
-
-    // 1. Run Baseline
-    Result baseline = run_benchmark("1. Naive (O(n^3))", naive_multiplication, N, BS, A, B, C);
-
-    // 2. Run Memory Optimization
-    Result reordered = run_benchmark("2. Loop Reordered (Stride-1)", loop_reordered_multiplication, N,BS, A, B, C);
-
-    // 3. Run Multithreading
-    Result openmp = run_benchmark("3. OpenMP + Cache Blocking", cache_blocking_and_multithreaded_multiplication, N, BS,A, B, C);
-
-    // 4. Run Ultimate
-    Result ultimate = run_benchmark("4. AVX2 + Register Blocking", ultimate_k_unrolled_multiplication, N,BS, A, B, C);
-
-    std::cout << "\n================================================================" << std::endl;
-    std::cout << "   FINAL PERFORMANCE REPORT" << std::endl;
-    std::cout << "================================================================" << std::endl;
-    std::cout << std::left << std::setw(30) << "Version" 
-              << std::setw(15) << "GFLOPS" 
-              << std::setw(15) << "Speedup" << std::endl;
-    std::cout << "----------------------------------------------------------------" << std::endl;
-
-    auto print_row = [&](std::string name, double gflops) {
-        double speedup = gflops / baseline.gflops;
-        std::cout << std::left << std::setw(30) << name 
-                  << std::setw(15) << gflops 
-                  << std::setw(15) << std::to_string((int)speedup) + "x" << std::endl;
-    };
-
-    print_row("Naive", baseline.gflops);
-    print_row("Loop Reordered", reordered.gflops);
-    print_row("OpenMP + Tiling", openmp.gflops);
-    print_row("AVX2 Ultimate", ultimate.gflops);
+    //5. throughput calc
+    // 5.1. Calculate total floating-point operations performed PER ITERATION (2 * N^3)
+    double total_flops = 2.0 * static_cast<double>(N) * static_cast<double>(N) * static_cast<double>(N);
     
-    std::cout << "================================================================" << std::endl;
-
-    return 0;
+    // 5.2. Pass raw FLOP count. 
+    // kIsRate divides total_flops by execution time to get FLOPs/sec.
+    // kIs1000 scales the output automatically into kFLOPs, MFLOPs, or GFLOPs (e.g. 89.3G/s).
+    state.counters["GFLOPS"] = benchmark::Counter(
+        total_flops, 
+        benchmark::Counter::kIsRate | benchmark::Counter::kIsIterationInvariant
+    );
 }
+
+// 6. Registration and Argument Passing
+// BENCHMARK_CAPTURE allows us to pass our specific kernel functions into the generic BM_GEMM template.
+// ->RangeMultiplier(2)->Range(256, 1024) tests N=256, N=512, and N=1024 automatically[cite: 3].
+// ->Unit(benchmark::kMillisecond) cleans up the output format for macro-level operations.
+// with userealtime()
+BENCHMARK_CAPTURE(BM_GEMM, 1_Naive, naive_multiplication)
+    ->RangeMultiplier(2)->Range(256, 1024)->Unit(benchmark::kMillisecond)->UseRealTime();
+
+BENCHMARK_CAPTURE(BM_GEMM, 2_LoopReordered, loop_reordered_multiplication)
+    ->RangeMultiplier(2)->Range(256, 1024)->Unit(benchmark::kMillisecond)->UseRealTime();
+
+BENCHMARK_CAPTURE(BM_GEMM, 3_OpenMP_Tiling, cache_blocking_and_multithreaded_multiplication)
+    ->RangeMultiplier(2)->Range(256, 1024)->Unit(benchmark::kMillisecond)->UseRealTime();
+
+BENCHMARK_CAPTURE(BM_GEMM, 4_AVX2_Ultimate, ultimate_k_unrolled_multiplication)
+    ->RangeMultiplier(2)->Range(256, 1024)->Unit(benchmark::kMillisecond)->UseRealTime();
+
+// 7. Auto-generated Main
+// Replaces standard int main(). Automatically handles CLI arguments, statistical outputs, and framework initialization[cite: 3].
+BENCHMARK_MAIN();
+// struct Result {
+//     double time;
+//     double gflops;
+// };
+
+// // This function runs any multiplication kernel you pass to it
+// Result run_benchmark(const std::string& name, 
+//                      void (*func)(int, int , const std::vector<double>&, const std::vector<double>&, std::vector<double>&),
+//                      int N, 
+//                      int BS,
+//                      const std::vector<double>& A, 
+//                      const std::vector<double>& B, 
+//                      std::vector<double>& C) 
+// {
+//     // 1. Reset C
+//     std::fill(C.begin(), C.end(), 0.0);
+    
+//     // 2. Warmup (optional, but good for stability)
+//     func(N,BS, A, B, C); 
+//     std::fill(C.begin(), C.end(), 0.0);
+
+//     // 3. Run Benchmark
+//     auto start = std::chrono::high_resolution_clock::now();
+//     func(N, BS,A, B, C);
+//     auto end = std::chrono::high_resolution_clock::now();
+
+//     // 4. Calculate Metrics
+//     std::chrono::duration<double> diff = end - start;
+//     double seconds = diff.count();
+//     double operations = 2.0 * N * N * N; // 2N^3 FLOPs
+//     double gflops = (operations * 1e-9) / seconds;
+
+//     // 5. Verify (Just checking one cell is usually enough for a quick check)
+//     if (std::abs(C[0] - N) > 1e-9) {
+//         std::cout << "[FAILED] " << name << " produced incorrect math!" << std::endl;
+//         return {seconds, 0.0};
+//     }
+
+//     std::cout << std::left << std::setw(35) << name 
+//               << " | Time: " << std::fixed << std::setprecision(4) << seconds << " s"
+//               << " | GFLOPS: " << std::setprecision(2) << gflops << std::endl;
+
+//     return {seconds, gflops};
+// }
+
+// int main() {
+//     int N = 1024;
+//     int BS = 40;
+//     std::cout << "================================================================" << std::endl;
+//     std::cout << "   HIGH-PERFORMANCE MATRIX MULTIPLICATION BENCHMARK (N=" << N << ")" << std::endl;
+//     std::cout << "================================================================" << std::endl;
+
+//     // Generate Data
+//     std::vector<double> A = generate_matrix(N);
+//     std::vector<double> B = generate_matrix(N);
+//     std::vector<double> C = generate_zero_matrix(N);
+
+//     // 1. Run Baseline
+//     Result baseline = run_benchmark("1. Naive (O(n^3))", naive_multiplication, N, BS, A, B, C);
+
+//     // 2. Run Memory Optimization
+//     Result reordered = run_benchmark("2. Loop Reordered (Stride-1)", loop_reordered_multiplication, N,BS, A, B, C);
+
+//     // 3. Run Multithreading
+//     Result openmp = run_benchmark("3. OpenMP + Cache Blocking", cache_blocking_and_multithreaded_multiplication, N, BS,A, B, C);
+
+//     // 4. Run Ultimate
+//     Result ultimate = run_benchmark("4. AVX2 + Register Blocking", ultimate_k_unrolled_multiplication, N,BS, A, B, C);
+
+//     std::cout << "\n================================================================" << std::endl;
+//     std::cout << "   FINAL PERFORMANCE REPORT" << std::endl;
+//     std::cout << "================================================================" << std::endl;
+//     std::cout << std::left << std::setw(30) << "Version" 
+//               << std::setw(15) << "GFLOPS" 
+//               << std::setw(15) << "Speedup" << std::endl;
+//     std::cout << "----------------------------------------------------------------" << std::endl;
+
+//     auto print_row = [&](std::string name, double gflops) {
+//         double speedup = gflops / baseline.gflops;
+//         std::cout << std::left << std::setw(30) << name 
+//                   << std::setw(15) << gflops 
+//                   << std::setw(15) << std::to_string((int)speedup) + "x" << std::endl;
+//     };
+
+//     print_row("Naive", baseline.gflops);
+//     print_row("Loop Reordered", reordered.gflops);
+//     print_row("OpenMP + Tiling", openmp.gflops);
+//     print_row("AVX2 Ultimate", ultimate.gflops);
+    
+//     std::cout << "================================================================" << std::endl;
+
+//     return 0;
+// }

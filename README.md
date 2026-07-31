@@ -43,7 +43,7 @@ This project is structured as a series of incremental optimizations, identifying
 ### Cache Blocking & Alignment
 The kernel uses a Block Size (`BS`) of 40.
 * **Why 40?** A cache line is 64 bytes (8 doubles). A block width of 40 doubles consumes exactly 5 cache lines ($40/8 = 5$), ensuring clean memory alignment and minimizing "split loads" across cache boundaries.
-* **L2 Residence:** The blocking strategy ensures the working set fits comfortably within the 1.25MB L2 cache of the Tiger Lake architecture.
+* **L2 Residence:** The blocking strategy ensures the working set fits comfortably within the 1.25MB L2 cache of the AMD zen 3 architecture.
 
 ### AVX2 Intrinsics
 The core computational kernel allows the CPU to perform 16 floating-point operations per cycle per core (assuming FMA throughput).
@@ -76,11 +76,12 @@ for (; r < k_limit - 3; r += 4) {
 # -O3: Maximum optimization
 # -march=native: Enable AVX2/FMA instructions specific to your CPU
 # -fopenmp: Enable multithreading
-g++ Source.cpp -o gemm_engine -O3 -march=native -fopenmp
+g++ -O3 -march=native -fopenmp Source.cpp -o gemm_bench -L/usr/local/lib -I/usr/local/include -lbenchmark_main -lbenchmark -lpthread
 ```
 ### Execution:
 ```
-./gemm_engine
+export OMP_NUM_THREADS=$(nproc)
+./gemm_bench
 ```
 ###  Roofline Analysis
 ## Hardware: Ryzen 5 5625U (6 cores, 12 threads).
