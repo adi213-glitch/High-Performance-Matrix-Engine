@@ -469,7 +469,7 @@ static void BM_GEMM(benchmark::State& state, Func func) {
     
     // 5.2. Pass raw FLOP count. 
     // kIsRate divides total_flops by execution time to get FLOPs/sec.
-    // kIs1000 scales the output automatically into kFLOPs, MFLOPs, or GFLOPs (e.g. 89.3G/s).
+    // kIsIterationInvariant scales single-iteration FLOPs by total iterations run
     state.counters["GFLOPS"] = benchmark::Counter(
         total_flops, 
         benchmark::Counter::kIsRate | benchmark::Counter::kIsIterationInvariant
